@@ -12,20 +12,21 @@ const Message = require("./models/Message");
 
 const app = express();
 const server = http.createServer(app);
+const allowedOrigins = (process.env.CORS_ORIGIN || "").split(",").map((origin) => origin.trim()).filter(Boolean);
 const io = new Server(server, {
   cors: {
-    origin: "*", 
-  }
+    origin: allowedOrigins.length ? allowedOrigins : false,
+  },
 });
 
-app.use(cors());
+app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : false }));
 app.use(express.json());
 
 // --- Cloudinary কনফিগারেশন ---
 cloudinary.config({
-  cloud_name: "dd8yv8bzc", 
-  api_key: "251538387674112",
-  api_secret: "EBO8BbFsLc9qN_BEB5bSc_AsIDs",
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 const storage = new CloudinaryStorage({
