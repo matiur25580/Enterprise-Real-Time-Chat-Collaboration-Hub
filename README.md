@@ -2,6 +2,10 @@
 
 A real-time chat application built with React (frontend) and Node.js with Socket.io (backend).
 
+## Screenshots
+
+Real application screenshots are not committed yet. Follow the [screenshot capture guide](docs/screenshots/README.md) to run the client and server with synthetic test users, then add the actual login, chat workspace, and online-presence captures here. No mock screenshots are used.
+
 ## Project Structure
 
 ```
