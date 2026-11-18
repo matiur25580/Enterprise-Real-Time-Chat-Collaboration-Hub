@@ -1,119 +1,120 @@
-# Chat App
+# Real-Time Chat Application
 
-A real-time chat application built with React (frontend) and Node.js with Socket.io (backend).
+A React and Socket.IO chat prototype with MongoDB message persistence and Cloudinary image uploads. This repository is an evolving portfolio project; it is **not yet suitable for real users or sensitive conversations**.
 
-## Screenshots
+## Current implementation
 
-Real application screenshots are not committed yet. Follow the [screenshot capture guide](docs/screenshots/README.md) to run the client and server with synthetic test users, then add the actual login, chat workspace, and online-presence captures here. No mock screenshots are used.
+- React client with a Socket.IO connection.
+- Express and Socket.IO server.
+- MongoDB persistence for the messages handled by the active server entry point.
+- Message creation and broadcast, typing indicators, read-state events, and message deletion.
+- Image upload through Cloudinary.
+- Basic user and message Mongoose models.
 
-## Project Structure
+## Architecture
 
-```
-chat-app/
-├── client/                 # React frontend
-│   ├── public/
-│   ├── src/
-│   │   ├── components/     # React components
-│   │   │   ├── ChatBox.js
-│   │   │   ├── Message.js
-│   │   │   └── Sidebar.js
-│   │   ├── App.js          # Main app with Socket.io connection
-│   │   ├── App.css
-│   │   └── index.js
-│   └── package.json
-├── server/                 # Node.js backend
-│   ├── models/
-│   │   ├── User.js         # User schema
-│   │   └── Message.js      # Message schema
-│   ├── routes/
-│   │   ├── auth.js         # Authentication routes
-│   │   └── messages.js     # Message routes
-│   └── index.js            # Express & Socket.io setup
-├── package.json            # Root dependencies
-└── README.md
+```text
+React client
+  ├── HTTP: message history and image upload
+  └── Socket.IO: send/receive, typing, read and delete events
+             |
+             v
+Express + Socket.IO server
+  ├── MongoDB / Mongoose
+  └── Cloudinary image storage
 ```
 
-## Getting Started
+## Tech stack
 
-### Prerequisites
-- Node.js v14+
-- npm or yarn
+| Area | Technology |
+|---|---|
+| Client | React, Axios, Socket.IO Client |
+| Server | Node.js, Express, Socket.IO |
+| Database | MongoDB, Mongoose |
+| Media | Multer, Cloudinary |
+| Authentication-related packages | bcryptjs, jsonwebtoken |
 
-### Installation
+## Run locally
 
-1. **Install server dependencies:**
-   ```bash
-   npm install
-   ```
+### Requirements
 
-2. **Install client dependencies:**
-   ```bash
-   cd client
-   npm install
-   cd ..
-   ```
+- Node.js and npm
+- MongoDB instance
+- Cloudinary account for image uploads
 
-### Running the Application
+### 1. Install server dependencies
 
-1. **Start the server:**
-   ```bash
-   npm run dev
-   ```
-   The server will run on `http://localhost:4000`
+From the repository root:
 
-2. **In a new terminal, start the client:**
-   ```bash
-   cd client
-   npm start
-   ```
-   The app will open at `http://localhost:3000`
+```bash
+npm install
+```
 
-## Features
+Create a root `.env` file:
 
-- Real-time messaging using Socket.io
-- User authentication (register/login)
-- Online users list
-- Message history
-- Password hashing with bcryptjs
-- JWT authentication tokens
+```dotenv
+PORT=5000
+MONGO_URL=mongodb://127.0.0.1:27017/chat_app
+CORS_ORIGIN=http://localhost:3000
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+```
 
-## Technologies Used
+Start the server:
 
-**Frontend:**
-- React
-- Socket.io Client
-- Axios
+```bash
+npm run dev
+```
 
-**Backend:**
-- Express.js
-- Socket.io
-- MongoDB (Mongoose)
-- bcryptjs
-- jsonwebtoken
+### 2. Install and start the client
 
-## API Endpoints
+In a second terminal:
 
-### Authentication
-- `POST /api/auth/register` - Register a new user
-- `POST /api/auth/login` - Login user
+```bash
+cd client
+npm install
+npm start
+```
 
-### Messages
-- `GET /api/messages/:senderId/:receiverId` - Get messages between users
-- `POST /api/messages/send` - Send a message
-- `PATCH /api/messages/:messageId/read` - Mark message as read
+The current client expects the API and Socket.IO server at `http://localhost:5000` and runs on `http://localhost:3000`.
 
-## Socket Events
+## Active server endpoints and events
 
-**Client → Server:**
-- `join` - User joins the chat
-- `send_message` - Send a message
+| Type | Name | Purpose |
+|---|---|---|
+| HTTP | `GET /messages` | Load message history |
+| HTTP | `POST /upload` | Upload an image |
+| HTTP | `DELETE /messages/:id` | Delete a message |
+| Socket | `send_message` | Submit a message |
+| Socket | `receive_message` | Broadcast a saved message |
+| Socket | `typing`, `stop_typing` | Typing indicators |
+| Socket | `mark_as_read`, `message_read` | Read-state updates |
+| Socket | `message_deleted` | Notify clients of deletion |
 
-**Server → Client:**
-- `receive_message` - Receive a message
-- `users_list` - Get list of online users
+## Important engineering status
 
-## Notes
+The active `server/index.js` entry point does not currently mount the separate authentication and message route modules. The current socket flow also trusts client-supplied sender information and broadcasts messages globally.
 
-- Update MongoDB connection string in `server/index.js`
-- Set `JWT_SECRET` in environment variables for production
-- Configure CORS origins as needed
+Before using this application beyond a local demo, the following work is required:
+
+- Authenticate Socket.IO connections and derive sender identity from the verified session.
+- Enforce conversation membership and message-level authorization on every read, write and delete.
+- Replace global message broadcasts with authorized conversation rooms.
+- Add request validation, rate limits, upload size/type enforcement and safe error responses.
+- Add pagination, indexes, integration tests and a deployment-aware client API URL.
+- Configure secrets through the hosting provider; never commit credentials.
+
+Do not use real personal, confidential or sensitive message data with the current implementation.
+
+## Roadmap
+
+- [ ] Integrate and test authentication in the active server entry point.
+- [ ] Add private conversation and membership authorization.
+- [ ] Harden Socket.IO event validation and room handling.
+- [ ] Add automated API and realtime integration tests.
+- [ ] Add production deployment configuration and genuine application screenshots.
+
+## Maintainer
+
+**Matiur Rahaman** · [GitHub](https://github.com/matiur25580)
