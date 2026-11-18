@@ -50,7 +50,7 @@ From the repository root:
 npm install
 ```
 
-Create a root `.env` file:
+Create a root `.env` file (it is excluded from Git by the repository ignore rules):
 
 ```dotenv
 PORT=5000
@@ -101,7 +101,7 @@ Before using this application beyond a local demo, the following work is require
 - Authenticate Socket.IO connections and derive sender identity from the verified session.
 - Enforce conversation membership and message-level authorization on every read, write and delete.
 - Replace global message broadcasts with authorized conversation rooms.
-- Add request validation, rate limits, upload size/type enforcement and safe error responses.
+- Add authenticated sender identity, conversation-level authorization, rate limits and automated integration tests. The current server now validates message fields, caps message history and upload size, checks image MIME types and returns safer HTTP errors, but those controls do not replace authentication.
 - Add pagination, indexes, integration tests and a deployment-aware client API URL.
 - Configure secrets through the hosting provider; never commit credentials.
 
