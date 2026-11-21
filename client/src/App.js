@@ -1,61 +1,58 @@
 import React, { useState, useEffect, useRef } from "react";
 import io from "socket.io-client";
 import axios from "axios";
-import EmojiPicker from 'emoji-picker-react';
+import EmojiPicker from "emoji-picker-react";
 import "./App.css";
 
-const socket = io("http://localhost:5000");
+const socket = io({ autoConnect: false });
 
 function App() {
-  const [sender, setSender] = useState("");
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState("");
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({ username: "", email: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [chat, setChat] = useState([]);
   const [showEmoji, setShowEmoji] = useState(false);
   const [uploading, setUploading] = useState(false);
-  
-  // টাইপিং ফিচারের জন্য স্টেট
-  const [isTyping, setIsTyping] = useState(false); 
-  const [typingUser, setTypingUser] = useState(""); 
-  
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingUser, setTypingUser] = useState("");
   const lastMessageRef = useRef(null);
+  const sender = user ? user.username : "";
 
   useEffect(() => {
-    const fetchMessages = async () => {
-      try {
-        const response = await axios.get("http://localhost:5000/messages");
-        setChat(response.data);
-      } catch (err) {
-        console.error("মেসেজ লোড করতে সমস্যা:", err);
-      }
-    };
-    fetchMessages();
+    const savedToken = sessionStorage.getItem("chat_token");
+    if (!savedToken) return;
+    axios.get("/api/auth/me", { headers: { Authorization: "Bearer " + savedToken } })
+      .then((response) => {
+        setToken(savedToken);
+        setUser(response.data.user);
+      })
+      .catch(() => sessionStorage.removeItem("chat_token"));
+  }, []);
 
-    socket.on("receive_message", (data) => {
-      setChat((prev) => [...prev, data]);
-    });
+  useEffect(() => {
+    if (!user || !token) return undefined;
+    axios.defaults.headers.common.Authorization = "Bearer " + token;
+    socket.auth = { token };
+    socket.connect();
 
-    socket.on("message_deleted", (id) => {
-      setChat((prev) => prev.filter((msg) => msg._id !== id));
-    });
+    axios.get("/messages")
+      .then((response) => setChat(response.data))
+      .catch((error) => console.error("Unable to load messages:", error));
 
-    // মেসেজ পড়া হলে আপডেট করা
-    socket.on("message_read", (updatedMessage) => {
-      setChat((prev) => 
-        prev.map((msg) => msg._id === updatedMessage._id ? updatedMessage : msg)
-      );
-    });
-
-    // অন্যের টাইপিং ইভেন্ট রিসিভ করা
+    socket.on("receive_message", (data) => setChat((prev) => [...prev, data]));
+    socket.on("message_deleted", (id) => setChat((prev) => prev.filter((msg) => msg._id !== id)));
+    socket.on("message_read", (updated) => setChat((prev) => prev.map((msg) => msg._id === updated._id ? updated : msg)));
     socket.on("display_typing", (data) => {
       if (data.sender !== sender) {
         setTypingUser(data.sender);
         setIsTyping(true);
       }
     });
-
-    socket.on("stop_typing", () => {
-      setIsTyping(false);
-    });
+    socket.on("stop_typing", () => setIsTyping(false));
 
     return () => {
       socket.off("receive_message");
@@ -63,104 +60,121 @@ function App() {
       socket.off("message_read");
       socket.off("display_typing");
       socket.off("stop_typing");
+      socket.disconnect();
     };
-  }, [sender]);
+  }, [user, token, sender]);
 
   useEffect(() => {
     lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat]);
 
-  // ইনপুট বক্সে টাইপ করার সময় ইভেন্ট পাঠানো
-  const handleTyping = (e) => {
-    setMessage(e.target.value);
-
-    if (sender.trim() !== "") {
-      socket.emit("typing", { sender });
-
-      // টাইপিং থামানোর ২ সেকেন্ড পর সিগন্যাল পাঠানো
+  const handleTyping = (event) => {
+    setMessage(event.target.value);
+    if (user) {
+      socket.emit("typing");
       clearTimeout(window.typingTimeout);
-      window.typingTimeout = setTimeout(() => {
-        socket.emit("stop_typing");
-      }, 2000);
+      window.typingTimeout = setTimeout(() => socket.emit("stop_typing"), 2000);
     }
   };
 
-  const sendMessage = (e) => {
-    if (e) e.preventDefault();
-    
-    console.log("Socket connected:", socket.connected);
-    console.log("Sender:", sender, "Message:", message);
-    
-    if (message.trim() !== "" && sender.trim() !== "") {
-      const messageData = { sender, content: message };
-      console.log("Sending message:", messageData);
-      socket.emit("send_message", messageData);
-      socket.emit("stop_typing");
-      setMessage(""); 
-      setShowEmoji(false);
-    } else {
-      alert("Please enter both Name and Message!");
-    }
+  const sendMessage = (event) => {
+    if (event) event.preventDefault();
+    if (!message.trim() || !user) return;
+    socket.emit("send_message", { content: message });
+    socket.emit("stop_typing");
+    setMessage("");
+    setShowEmoji(false);
   };
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (sender.trim() === "") {
-      alert("Please enter your name first!");
-      return;
-    }
-
+  const handleImageUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file || !user) return;
     const formData = new FormData();
     formData.append("image", file);
-
     setUploading(true);
     try {
-      const res = await axios.post("http://localhost:5000/upload", formData);
-      const messageData = { 
-        sender, 
-        content: "📷 Photo", 
-        imageUrl: res.data.imageUrl, 
-        timestamp: new Date() 
-      };
-      socket.emit("send_message", messageData);
-    } catch (err) {
-      alert("ছবি আপলোড করতে সমস্যা হয়েছে!");
+      const response = await axios.post("/upload", formData);
+      socket.emit("send_message", { content: "📷 Photo", imageUrl: response.data.imageUrl });
+    } catch (_error) {
+      alert("Image upload failed.");
     } finally {
       setUploading(false);
+      event.target.value = "";
     }
   };
 
   const deleteMessage = async (id) => {
-    if (!id) return;
-    if (window.confirm("আপনি কি নিশ্চিতভাবে এই মেসেজটি ডিলিট করতে চান?")) {
-      try {
-        const res = await axios.delete(`http://localhost:5000/messages/${id}`);
-        if (res.status === 200) {
-          setChat((prevChat) => prevChat.filter((msg) => msg._id !== id));
-        }
-      } catch (err) {
-        alert("মেসেজ ডিলিট করা যায়নি!");
-      }
+    if (!id || !window.confirm("Delete this message?")) return;
+    try {
+      await axios.delete("/messages/" + id);
+      setChat((previous) => previous.filter((msg) => msg._id !== id));
+    } catch (error) {
+      alert(error.response?.data?.error || "Message could not be deleted.");
     }
   };
 
-  const onEmojiClick = (emojiData) => {
-    setMessage(prev => prev + emojiData.emoji);
+  const submitAuth = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+    setAuthBusy(true);
+    try {
+      const endpoint = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const payload = authMode === "register" ? authForm : { email: authForm.email, password: authForm.password };
+      const response = await axios.post(endpoint, payload);
+      sessionStorage.setItem("chat_token", response.data.token);
+      setToken(response.data.token);
+      setUser(response.data.user);
+      setChat([]);
+    } catch (error) {
+      setAuthError(error.response?.data?.error || "Unable to authenticate. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
   };
+
+  const logout = () => {
+    socket.disconnect();
+    sessionStorage.removeItem("chat_token");
+    delete axios.defaults.headers.common.Authorization;
+    setToken("");
+    setUser(null);
+    setChat([]);
+    setMessage("");
+  };
+
+  if (!user) {
+    return (
+      <div className="App">
+        <form className="chat-window" onSubmit={submitAuth}>
+          <div className="chat-header"><h3>{authMode === "register" ? "Create account" : "Sign in to chat"}</h3></div>
+          <div className="chat-footer" style={{ display: "flex", flexDirection: "column", padding: 20, gap: 12 }}>
+            {authMode === "register" && <input className="name-input" placeholder="Username" minLength={3} maxLength={30} value={authForm.username} onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })} required />}
+            <input className="name-input" type="email" placeholder="Email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} required />
+            <input className="msg-input" type="password" placeholder="Password (12+ characters)" minLength={12} maxLength={128} value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} required />
+            {authError && <p role="alert">{authError}</p>}
+            <button className="send-btn" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : authMode === "register" ? "Create account" : "Sign in"}</button>
+            <button type="button" onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setAuthError(""); }}>
+              {authMode === "login" ? "Need an account? Register" : "Already registered? Sign in"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="App">
       <div className="chat-window">
         <div className="chat-header">
           <h3>💬 Live Chat Box</h3>
+          <span>{sender}</span>
+          <button type="button" onClick={logout}>Sign out</button>
         </div>
-        
         <div className="message-container">
           {chat.map((msg, index) => (
-            <div key={msg._id || index} className={`message ${msg.sender === sender ? "own-message" : ""}`} 
+            <div key={msg._id || index} className={"message " + (msg.sender === sender ? "own-message" : "")}
               ref={(el) => {
-                if (el && !msg.read && msg.sender !== sender) {
+                if (el && !msg.read && msg.sender !== sender && msg._id) {
                   const observer = new IntersectionObserver(([entry]) => {
                     if (entry.isIntersecting) {
                       socket.emit("mark_as_read", msg._id);
@@ -172,66 +186,25 @@ function App() {
               }}>
               <div className="msg-header">
                 <p className="sender-name">{msg.sender}</p>
-                {msg.sender === sender && (
-                  <button className="delete-btn" onClick={() => deleteMessage(msg._id)}>🗑️</button>
-                )}
+                {msg.sender === sender && <button className="delete-btn" onClick={() => deleteMessage(msg._id)}>🗑️</button>}
               </div>
               {msg.imageUrl && <img src={msg.imageUrl} alt="sent" className="chat-image" />}
               <p className="message-text">{msg.content}</p>
               <div className="message-footer">
-                <span className="message-time">
-                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-                {msg.sender === sender && (
-                  <span className={`message-tick ${msg.read ? "blue-tick" : "grey-tick"}`}>
-                    {msg.read ? "✔✔" : "✔"}
-                  </span>
-                )}
+                <span className="message-time">{new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                {msg.sender === sender && <span className={"message-tick " + (msg.read ? "blue-tick" : "grey-tick")}>{msg.read ? "✔✔" : "✔"}</span>}
               </div>
             </div>
           ))}
-          
-          {/* টাইপিং ইন্ডিকেটর এখানে দেখাবে */}
           {isTyping && <div className="typing-indicator">✍️ {typingUser} is typing...</div>}
-          
           <div ref={lastMessageRef} />
         </div>
-
-        {showEmoji && (
-          <div className="emoji-picker">
-            <EmojiPicker onEmojiClick={onEmojiClick} />
-          </div>
-        )}
-
+        {showEmoji && <div className="emoji-picker"><EmojiPicker onEmojiClick={(emoji) => setMessage((prev) => prev + emoji.emoji)} /></div>}
         <div className="chat-footer">
-          <input 
-            className="name-input" 
-            placeholder="Name" 
-            value={sender} 
-            onChange={(e) => setSender(e.target.value)} 
-          />
-          
-          <input 
-            type="file" 
-            accept="image/*" 
-            id="fileInput" 
-            style={{ display: "none" }} 
-            onChange={handleImageUpload} 
-          />
-          
-          <button type="button" onClick={() => document.getElementById("fileInput").click()} className="emoji-btn">
-            {uploading ? "⏳" : "🖼️"}
-          </button>
-          
+          <input type="file" accept="image/jpeg,image/png,image/webp" id="fileInput" style={{ display: "none" }} onChange={handleImageUpload} />
+          <button type="button" onClick={() => document.getElementById("fileInput").click()} className="emoji-btn">{uploading ? "⏳" : "🖼️"}</button>
           <button type="button" onClick={() => setShowEmoji(!showEmoji)} className="emoji-btn">😊</button>
-          
-          <input 
-            className="msg-input" 
-            value={message} 
-            placeholder="Type message..." 
-            onChange={handleTyping} 
-            onKeyDown={(e) => e.key === "Enter" && sendMessage(e)}
-          />
+          <input className="msg-input" value={message} placeholder="Type message..." onChange={handleTyping} onKeyDown={(e) => e.key === "Enter" && sendMessage(e)} />
           <button className="send-btn" onClick={sendMessage}>Send</button>
         </div>
       </div>
