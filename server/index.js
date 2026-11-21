@@ -13,6 +13,7 @@ const User = require("./models/User");
 const jwt = require("jsonwebtoken");
 const { authenticate, getJwtSecret } = require("./middleware/authenticate");
 const authRoutes = require("./routes/auth");
+const { createSocketEventLimiter } = require("./middleware/socket-rate-limit");
 
 try { getJwtSecret(); } catch (error) { console.error(error.message); process.exit(1); }
 
@@ -117,8 +118,18 @@ io.use(async (socket, next) => {
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
+  const eventLimiter = createSocketEventLimiter({
+    limits: {
+      send_message: { maxEvents: 30, windowMs: 60_000 },
+      typing: { maxEvents: 10, windowMs: 10_000 },
+    },
+  });
 
   socket.on("send_message", async (data) => {
+    if (!eventLimiter.allow("send_message")) {
+      socket.emit("message_error", { message: "You are sending messages too quickly. Please wait." });
+      return;
+    }
     try {
       if (!data || typeof data !== "object") return;
 
@@ -142,7 +153,8 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("typing", (data) => {
+  socket.on("typing", () => {
+    if (!eventLimiter.allow("typing")) return;
     socket.broadcast.emit("display_typing", { sender: socket.user.username });
   });
 
@@ -167,6 +179,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    eventLimiter.reset();
     console.log("User disconnected:", socket.id);
   });
 });
