@@ -122,3 +122,80 @@ Do not use real personal, confidential or sensitive message data with the curren
 ## Maintainer
 
 **Matiur Rahaman** · [GitHub](https://github.com/matiur25580)
+
+
+## Dashboard Gallery
+
+Explore 12 illustrative collaboration workspaces for overview, team conversations, direct messages, group channels, message search, file sharing, presence, notifications, moderation, workspace access, realtime service health and engagement analytics. Sample values are illustrative only and are not live message content, user presence or service telemetry.
+
+### 01. Collaboration Overview
+
+Workspace activity, message volume, active members and collaboration health.
+
+![Collaboration Overview dashboard preview](docs/readme-dashboard-gallery/dashboard-01.svg)
+
+### 02. Team Conversations
+
+Channel activity, unread messages, conversation volume and engagement.
+
+![Team Conversations dashboard preview](docs/readme-dashboard-gallery/dashboard-02.svg)
+
+### 03. Direct Messages
+
+One-to-one conversations, recent activity, unread items and response trends.
+
+![Direct Messages dashboard preview](docs/readme-dashboard-gallery/dashboard-03.svg)
+
+### 04. Group Channels
+
+Group activity, membership, topic updates and channel participation.
+
+![Group Channels dashboard preview](docs/readme-dashboard-gallery/dashboard-04.svg)
+
+### 05. Message Search & History
+
+Search activity, history retrieval, shared links and message discovery.
+
+![Message Search & History dashboard preview](docs/readme-dashboard-gallery/dashboard-05.svg)
+
+### 06. File & Media Sharing
+
+Shared files, uploads, recent media, storage and access activity.
+
+![File & Media Sharing dashboard preview](docs/readme-dashboard-gallery/dashboard-06.svg)
+
+### 07. Presence & Availability
+
+Online presence, member availability, active sessions and status distribution.
+
+![Presence & Availability dashboard preview](docs/readme-dashboard-gallery/dashboard-07.svg)
+
+### 08. Notifications Center
+
+Mentions, replies, notification delivery and unread notification queues.
+
+![Notifications Center dashboard preview](docs/readme-dashboard-gallery/dashboard-08.svg)
+
+### 09. Moderation & Safety
+
+Reported messages, moderation review, member restrictions and resolution.
+
+![Moderation & Safety dashboard preview](docs/readme-dashboard-gallery/dashboard-09.svg)
+
+### 10. Workspace Members & Roles
+
+Workspace membership, role distribution, invitations and access changes.
+
+![Workspace Members & Roles dashboard preview](docs/readme-dashboard-gallery/dashboard-10.svg)
+
+### 11. Realtime Service Health
+
+Socket connections, message delivery, latency and service availability.
+
+![Realtime Service Health dashboard preview](docs/readme-dashboard-gallery/dashboard-11.svg)
+
+### 12. Engagement Analytics
+
+Conversation trends, active users, response times and workspace engagement.
+
+![Engagement Analytics dashboard preview](docs/readme-dashboard-gallery/dashboard-12.svg)
