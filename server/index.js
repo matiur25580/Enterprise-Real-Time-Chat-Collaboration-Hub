@@ -9,6 +9,12 @@ const { CloudinaryStorage } = require("multer-storage-cloudinary");
 require("dotenv").config();
 
 const Message = require("./models/Message");
+const User = require("./models/User");
+const jwt = require("jsonwebtoken");
+const { authenticate, getJwtSecret } = require("./middleware/authenticate");
+const authRoutes = require("./routes/auth");
+
+try { getJwtSecret(); } catch (error) { console.error(error.message); process.exit(1); }
 
 const app = express();
 const server = http.createServer(app);
@@ -23,6 +29,7 @@ const io = new Server(server, {
 
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : false }));
 app.use(express.json({ limit: "16kb" }));
+app.use("/api/auth", authRoutes);
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -53,7 +60,7 @@ const upload = multer({
 const isValidObjectId = (id) => mongoose.isValidObjectId(id);
 
 // Return a bounded, chronological message history.
-app.get("/messages", async (_req, res, next) => {
+app.get("/messages", authenticate, async (_req, res, next) => {
   try {
     const messages = await Message.find()
       .sort({ timestamp: -1 })
@@ -65,7 +72,7 @@ app.get("/messages", async (_req, res, next) => {
   }
 });
 
-app.post("/upload", (req, res, next) => {
+app.post("/upload", authenticate, (req, res, next) => {
   upload.single("image")(req, res, (error) => {
     if (error) return next(error);
     if (!req.file) {
@@ -75,14 +82,14 @@ app.post("/upload", (req, res, next) => {
   });
 });
 
-app.delete("/messages/:id", async (req, res, next) => {
+app.delete("/messages/:id", authenticate, async (req, res, next) => {
   try {
     const { id } = req.params;
     if (!isValidObjectId(id)) {
       return res.status(400).json({ error: "Invalid message id." });
     }
 
-    const deletedMessage = await Message.findByIdAndDelete(id);
+    const deletedMessage = await Message.findOneAndDelete({ _id: id, sender: req.user.username });
     if (!deletedMessage) {
       return res.status(404).json({ error: "Message not found." });
     }
@@ -94,6 +101,20 @@ app.delete("/messages/:id", async (req, res, next) => {
   }
 });
 
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+    if (typeof token !== "string" || !token) return next(new Error("Authentication required."));
+    const payload = jwt.verify(token, getJwtSecret(), { algorithms: ["HS256"] });
+    const user = await User.findById(payload.sub).select("_id username email avatar");
+    if (!user) return next(new Error("Invalid authentication token."));
+    socket.user = user;
+    return next();
+  } catch (_error) {
+    return next(new Error("Invalid or expired authentication token."));
+  }
+});
+
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
@@ -101,7 +122,7 @@ io.on("connection", (socket) => {
     try {
       if (!data || typeof data !== "object") return;
 
-      const sender = typeof data.sender === "string" ? data.sender.trim() : "";
+      const sender = socket.user.username;
       const content = typeof data.content === "string" ? data.content.trim() : "";
       const imageUrl = typeof data.imageUrl === "string" ? data.imageUrl.trim() : "";
 
@@ -122,8 +143,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("typing", (data) => {
-    const sender = typeof data?.sender === "string" ? data.sender.slice(0, 80) : "";
-    if (sender) socket.broadcast.emit("display_typing", { sender });
+    socket.broadcast.emit("display_typing", { sender: socket.user.username });
   });
 
   socket.on("stop_typing", () => {
@@ -133,6 +153,8 @@ io.on("connection", (socket) => {
   socket.on("mark_as_read", async (messageId) => {
     try {
       if (!isValidObjectId(messageId)) return;
+      const message = await Message.findById(messageId);
+      if (!message || message.sender === socket.user.username) return;
       const updatedMessage = await Message.findByIdAndUpdate(
         messageId,
         { read: true },

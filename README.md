@@ -4,12 +4,12 @@ A React and Socket.IO chat prototype with MongoDB message persistence and Cloudi
 
 ## Current implementation
 
-- React client with a Socket.IO connection.
+- React client with account registration, sign-in and a token-backed Socket.IO connection.
 - Express and Socket.IO server.
 - MongoDB persistence for the messages handled by the active server entry point.
 - Message creation and broadcast, typing indicators, read-state events, and message deletion.
 - Image upload through Cloudinary.
-- Basic user and message Mongoose models.
+- User and message Mongoose models with hashed passwords and non-serialized password hashes.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ Express + Socket.IO server
 | Server | Node.js, Express, Socket.IO |
 | Database | MongoDB, Mongoose |
 | Media | Multer, Cloudinary |
-| Authentication-related packages | bcryptjs, jsonwebtoken |
+| Authentication | bcryptjs, jsonwebtoken (JWT bearer tokens) |
 
 ## Run locally
 
@@ -50,11 +50,12 @@ From the repository root:
 npm install
 ```
 
-Create a root `.env` file (it is excluded from Git by the repository ignore rules):
+Create a root `.env` file (it is excluded from Git by the repository ignore rules). Use a unique random JWT secret of at least 32 characters:
 
 ```dotenv
 PORT=5000
 MONGO_URL=mongodb://127.0.0.1:27017/chat_app
+JWT_SECRET=replace_with_a_random_secret_at_least_32_characters
 CORS_ORIGIN=http://localhost:3000
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
@@ -83,9 +84,12 @@ The current client expects the API and Socket.IO server at `http://localhost:500
 
 | Type | Name | Purpose |
 |---|---|---|
-| HTTP | `GET /messages` | Load message history |
-| HTTP | `POST /upload` | Upload an image |
-| HTTP | `DELETE /messages/:id` | Delete a message |
+| HTTP | `POST /api/auth/register` | Create an account (username, email, password of 12+ characters) |
+| `POST /api/auth/login` | Sign in and receive a 12-hour bearer token |
+| `GET /api/auth/me` | Return the authenticated profile |
+| `GET /messages` | Load message history (authenticated) |
+| HTTP | `POST /upload` | Upload an image (authenticated) |
+| HTTP | `DELETE /messages/:id` | Delete own message (authenticated) |
 | Socket | `send_message` | Submit a message |
 | Socket | `receive_message` | Broadcast a saved message |
 | Socket | `typing`, `stop_typing` | Typing indicators |
@@ -94,7 +98,7 @@ The current client expects the API and Socket.IO server at `http://localhost:500
 
 ## Important engineering status
 
-The active `server/index.js` entry point does not currently mount the separate authentication and message route modules. The current socket flow also trusts client-supplied sender information and broadcasts messages globally.
+The active server now requires a JWT for message history, image uploads, message deletion and Socket.IO connections. The sender name is derived from the verified user, and deletion is restricted to messages owned by that user. Password hashes are excluded from normal user queries and API responses. The chat is still one shared global room: authenticated users can see the same history and realtime events. Private conversations and per-conversation membership authorization are not implemented yet.
 
 Before using this application beyond a local demo, the following work is required:
 
