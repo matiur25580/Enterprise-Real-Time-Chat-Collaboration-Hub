@@ -128,6 +128,8 @@ io.on("connection", (socket) => {
     limits: {
       send_message: { maxEvents: 30, windowMs: 60_000 },
       typing: { maxEvents: 10, windowMs: 10_000 },
+      stop_typing: { maxEvents: 10, windowMs: 10_000 },
+      mark_as_read: { maxEvents: 60, windowMs: 60_000 },
     },
   });
 
@@ -165,16 +167,16 @@ io.on("connection", (socket) => {
   });
 
   socket.on("stop_typing", () => {
+    if (!eventLimiter.allow("stop_typing")) return;
     socket.broadcast.emit("stop_typing");
   });
 
   socket.on("mark_as_read", async (messageId) => {
     try {
       if (!isValidObjectId(messageId)) return;
-      const message = await Message.findById(messageId);
-      if (!message || message.sender === socket.user.username) return;
-      const updatedMessage = await Message.findByIdAndUpdate(
-        messageId,
+      if (!eventLimiter.allow("mark_as_read")) return;
+      const updatedMessage = await Message.findOneAndUpdate(
+        { _id: messageId, sender: { $ne: socket.user.username } },
         { read: true },
         { new: true }
       );
