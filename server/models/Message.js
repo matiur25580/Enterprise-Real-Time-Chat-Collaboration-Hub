@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 
+// Schema defines the persisted shape and validation rules for each chat message.
 const messageSchema = new mongoose.Schema(
   {
     sender: {
