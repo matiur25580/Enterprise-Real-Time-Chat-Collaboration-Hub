@@ -4,6 +4,7 @@ import axios from "axios";
 import EmojiPicker from "emoji-picker-react";
 import "./App.css";
 
+// Keep one Socket.IO client instance; connect only after the user has authenticated.
 const socket = io({ autoConnect: false });
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
   const lastMessageRef = useRef(null);
   const sender = user ? user.username : "";
 
+  // Restore the previous session by validating the token with the server on app startup.
   useEffect(() => {
     const savedToken = sessionStorage.getItem("chat_token");
     if (!savedToken) return;
@@ -33,6 +35,7 @@ function App() {
       .catch(() => sessionStorage.removeItem("chat_token"));
   }, []);
 
+  // Connect the live channel, load history, and subscribe to chat events for the signed-in user.
   useEffect(() => {
     if (!user || !token) return undefined;
     axios.defaults.headers.common.Authorization = "Bearer " + token;
@@ -68,6 +71,7 @@ function App() {
     lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat]);
 
+  // Broadcast typing state and automatically stop it after a short idle period.
   const handleTyping = (event) => {
     setMessage(event.target.value);
     if (user) {
@@ -77,6 +81,7 @@ function App() {
     }
   };
 
+  // Send message content over the authenticated socket; the server persists and broadcasts it.
   const sendMessage = (event) => {
     if (event) event.preventDefault();
     if (!message.trim() || !user) return;
@@ -86,6 +91,7 @@ function App() {
     setShowEmoji(false);
   };
 
+  // Upload the selected image first, then send its hosted URL as a normal chat message.
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
     if (!file || !user) return;
@@ -103,6 +109,7 @@ function App() {
     }
   };
 
+  // Ask the API to delete only the current user's message, then update the local chat view.
   const deleteMessage = async (id) => {
     if (!id || !window.confirm("Delete this message?")) return;
     try {
@@ -113,6 +120,7 @@ function App() {
     }
   };
 
+  // Share one form handler for registration and login, while keeping their request payloads distinct.
   const submitAuth = async (event) => {
     event.preventDefault();
     setAuthError("");
@@ -132,6 +140,7 @@ function App() {
     }
   };
 
+  // Disconnect live events and clear session credentials and user-specific UI state.
   const logout = () => {
     socket.disconnect();
     sessionStorage.removeItem("chat_token");
@@ -171,6 +180,7 @@ function App() {
           <button type="button" onClick={logout}>Sign out</button>
         </div>
         <div className="message-container">
+          {/* Render each message and observe incoming messages to mark them read when visible. */}
           {chat.map((msg, index) => (
             <div key={msg._id || index} className={"message " + (msg.sender === sender ? "own-message" : "")}
               ref={(el) => {
