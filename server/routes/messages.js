@@ -3,7 +3,7 @@ const Message = require('../models/Message');
 
 const router = express.Router();
 
-// Get all messages between two users
+// Get all messages between two users (legacy route kept for compatibility).
 router.get('/:senderId/:receiverId', async (req, res) => {
   try {
     const { senderId, receiverId } = req.params;
@@ -21,7 +21,7 @@ router.get('/:senderId/:receiverId', async (req, res) => {
   }
 });
 
-// Send a message
+// Send a message through the legacy REST endpoint; live chat uses Socket.IO in server/index.js.
 router.post('/send', async (req, res) => {
   try {
     const { senderId, receiverId, content } = req.body;
@@ -35,7 +35,7 @@ router.post('/send', async (req, res) => {
   }
 });
 
-// Mark message as read
+// Mark message as read through the legacy REST endpoint.
 router.patch('/:messageId/read', async (req, res) => {
   try {
     const { messageId } = req.params;
