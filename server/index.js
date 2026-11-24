@@ -213,7 +213,8 @@ if (!MONGO_URL) {
   process.exit(1);
 }
 
-// Start accepting traffic only after MongoDB has connected successfully.mongoose
+// Start accepting traffic only after MongoDB has connected successfully.
+mongoose
   .connect(MONGO_URL)
   .then(() => {
     server.listen(PORT, () => {
