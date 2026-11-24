@@ -1,48 +1,87 @@
 # Real-Time Chat Application
 
-A React and Socket.IO chat prototype with MongoDB message persistence and Cloudinary image uploads. This repository is an evolving portfolio project; it is **not yet suitable for real users or sensitive conversations**.
+A full-stack React and Socket.IO chat prototype with MongoDB message persistence, JWT-authenticated HTTP and realtime connections, and Cloudinary image uploads.
 
-## Current implementation
+> **Project status:** This is an evolving portfolio project, not a production messaging service. The current implementation is a single shared chat room: authenticated users can access the same message history and realtime events. Private conversations, conversation membership and per-room authorization are not implemented. Do not use real personal, confidential or sensitive message data.
 
-- React client with account registration, sign-in and a token-backed Socket.IO connection.
-- Express and Socket.IO server.
-- MongoDB persistence for the messages handled by the active server entry point.
-- Message creation and broadcast, typing indicators, read-state events, and message deletion.
-- Image upload through Cloudinary.
-- User and message Mongoose models with hashed passwords and non-serialized password hashes.
+## Product overview
+
+The application demonstrates a basic authenticated realtime messaging flow:
+
+1. A user registers or signs in with an email and password.
+2. The Express API verifies credentials and issues a short-lived bearer JWT.
+3. The React client stores the token in tab-scoped `sessionStorage` and validates restored sessions through the profile endpoint.
+4. The client sends authenticated HTTP requests and supplies the token in the Socket.IO handshake.
+5. The server persists messages in MongoDB and broadcasts realtime events to connected authenticated sockets.
+6. Users can upload images to Cloudinary and delete their own messages.
+
+## Implemented capabilities
+
+- Account registration and login with username, email and password validation.
+- Password hashing with bcryptjs; password fields are excluded from normal user queries and serialized responses.
+- JWT bearer authentication for protected HTTP endpoints.
+- JWT verification during the Socket.IO handshake; the sender identity is derived from the verified database user, not client-supplied message data.
+- Authenticated message history, image upload and message deletion.
+- Message creation and realtime broadcast, typing indicators, read-state updates and deletion notifications.
+- Owner-checked message deletion.
+- Cloudinary image uploads restricted to JPEG, PNG and WebP, with a 5 MB file-size limit.
+- Bounded message history (latest 100 records), request-body size limit and validation of message content.
+- Per-socket fixed-window limits for selected realtime events.
+- Centralized HTTP error handling and fail-fast checks for the JWT secret and MongoDB connection.
 
 ## Architecture
 
 ```text
-React client
-  ├── HTTP: message history and image upload
-  └── Socket.IO: send/receive, typing, read and delete events
-             |
-             v
-Express + Socket.IO server
-  ├── MongoDB / Mongoose
-  └── Cloudinary image storage
+React client (localhost:3000)
+  |
+  +-- HTTP / Axios
+  |     +-- Registration, login and profile
+  |     +-- Authenticated message history
+  |     +-- Image upload and own-message deletion
+  |
+  +-- Socket.IO client
+        +-- JWT in handshake auth
+        +-- Send / receive messages
+        +-- Typing and read-state events
+                  |
+                  v
+        Express + Socket.IO server (localhost:5000)
+          +-- JWT authentication middleware
+          +-- Authenticated socket handshake
+          +-- Message and user models
+          +-- Per-socket event limiter
+          +-- Cloudinary upload adapter
+                  |
+          +-------+--------+
+          v                v
+       MongoDB          Cloudinary
+     users/messages      image files
 ```
 
-## Tech stack
+The active server entry point is `server/index.js`. It connects to MongoDB before accepting traffic. The client uses the Create React App development proxy to reach the local API at port 5000.
+
+## Technology stack
 
 | Area | Technology |
 |---|---|
-| Client | React, Axios, Socket.IO Client |
-| Server | Node.js, Express, Socket.IO |
-| Database | MongoDB, Mongoose |
-| Media | Multer, Cloudinary |
-| Authentication | bcryptjs, jsonwebtoken (JWT bearer tokens) |
+| Frontend | React 18, Create React App |
+| HTTP client | Axios |
+| Realtime | Socket.IO 4 and Socket.IO Client |
+| Backend | Node.js 20+, Express 5 |
+| Database | MongoDB, Mongoose 8 |
+| Authentication | JWT (HS256), bcryptjs |
+| Media storage | Multer, Cloudinary |
+| Tests | Node.js built-in test runner |
 
 ## Run locally
 
-### Requirements
+### Prerequisites
 
-- Node.js and npm
-- MongoDB instance
-- Cloudinary account for image uploads
+- Node.js 20 or later and npm.
+- MongoDB instance.
+- Cloudinary account and API credentials for image uploads.
 
-### 1. Install server dependencies
+### 1. Install backend dependencies
 
 From the repository root:
 
@@ -50,25 +89,39 @@ From the repository root:
 npm install
 ```
 
-Create a root `.env` file (it is excluded from Git by the repository ignore rules). Use a unique random JWT secret of at least 32 characters:
+### 2. Configure the backend
+
+The active server calls dotenv with its default configuration, which loads `.env` from the process working directory. When you start the server from the repository root, create the root `.env` file from the maintained server example:
+
+```bash
+cp server/.env.example .env
+```
+
+Set the values in the root `.env` file:
 
 ```dotenv
 PORT=5000
 MONGO_URL=mongodb://127.0.0.1:27017/chat_app
-JWT_SECRET=replace_with_a_random_secret_at_least_32_characters
+JWT_SECRET=replace-with-a-unique-random-secret-at-least-32-characters
 CORS_ORIGIN=http://localhost:3000
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
-CLOUDINARY_API_SECRET=your_api_secret
+CLOUDINARY_API_SECRET=your_cloudinary_secret
 ```
 
-Start the server:
+The server exits at startup if `JWT_SECRET` is missing or shorter than 32 characters, or if `MONGO_URL` is not configured / the database connection fails. Keep credentials out of source control.
+
+### 3. Start the backend
+
+From the repository root:
 
 ```bash
 npm run dev
 ```
 
-### 2. Install and start the client
+The API and Socket.IO server listen on `http://localhost:5000`.
+
+### 4. Install and start the frontend
 
 In a second terminal:
 
@@ -78,55 +131,128 @@ npm install
 npm start
 ```
 
-The current client expects the API and Socket.IO server at `http://localhost:5000` and runs on `http://localhost:3000`.
+The React development server runs at `http://localhost:3000`. Its package configuration proxies relative API requests to `http://localhost:5000`.
 
-## Active server endpoints and events
+## Environment variables
 
-| Type | Name | Purpose |
+| Variable | Required | Description |
 |---|---|---|
-| HTTP | `POST /api/auth/register` | Create an account (username, email, password of 12+ characters) |
-| `POST /api/auth/login` | Sign in and receive a 12-hour bearer token |
-| `GET /api/auth/me` | Return the authenticated profile |
-| `GET /messages` | Load message history (authenticated) |
-| HTTP | `POST /upload` | Upload an image (authenticated) |
-| HTTP | `DELETE /messages/:id` | Delete own message (authenticated) |
-| Socket | `send_message` | Submit a message |
-| Socket | `receive_message` | Broadcast a saved message |
-| Socket | `typing`, `stop_typing` | Typing indicators |
-| Socket | `mark_as_read`, `message_read` | Read-state updates |
-| Socket | `message_deleted` | Notify clients of deletion |
+| `PORT` | No | HTTP and Socket.IO server port; defaults to 5000 |
+| `MONGO_URL` | Yes | MongoDB connection URI |
+| `JWT_SECRET` | Yes | HS256 signing secret, at least 32 characters |
+| `CORS_ORIGIN` | Recommended | Comma-separated browser origin allowlist; local default should be `http://localhost:3000` |
+| `CLOUDINARY_CLOUD_NAME` | For image uploads | Cloudinary cloud name |
+| `CLOUDINARY_API_KEY` | For image uploads | Cloudinary API key |
+| `CLOUDINARY_API_SECRET` | For image uploads | Cloudinary API secret |
 
-## Important engineering status
+Configure the same allowed frontend origin in `CORS_ORIGIN` for both the Express and Socket.IO CORS policies. Do not use wildcard origins with authenticated production traffic.
 
-The active server now requires a JWT for message history, image uploads, message deletion and Socket.IO connections. The sender name is derived from the verified user, and deletion is restricted to messages owned by that user. Password hashes are excluded from normal user queries and API responses. The chat is still one shared global room: authenticated users can see the same history and realtime events. Private conversations and per-conversation membership authorization are not implemented yet.
+## HTTP API
 
-Before using this application beyond a local demo, the following work is required:
+All protected routes require an `Authorization: Bearer <token>` header.
 
-- Authenticate Socket.IO connections and derive sender identity from the verified session.
-- Enforce conversation membership and message-level authorization on every read, write and delete.
-- Replace global message broadcasts with authorized conversation rooms.
-- Add authenticated sender identity, conversation-level authorization, rate limits and automated integration tests. The current server now validates message fields, caps message history and upload size, checks image MIME types and returns safer HTTP errors, but those controls do not replace authentication.
-- Add pagination, indexes, integration tests and a deployment-aware client API URL.
-- Configure secrets through the hosting provider; never commit credentials.
+| Method | Endpoint | Authentication | Purpose |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | Public | Register with username, email and 12–128 character password |
+| `POST` | `/api/auth/login` | Public | Sign in and receive a 12-hour JWT |
+| `GET` | `/api/auth/me` | Bearer JWT | Return the authenticated user's public profile |
+| `GET` | `/messages` | Bearer JWT | Retrieve the latest 100 messages |
+| `POST` | `/upload` | Bearer JWT | Upload one supported image to Cloudinary |
+| `DELETE` | `/messages/:id` | Bearer JWT | Delete a message owned by the authenticated user |
 
-Do not use real personal, confidential or sensitive message data with the current implementation.
+### Realtime events
+
+Socket.IO clients must provide the bearer token in the handshake auth object:
+
+```js
+const socket = io("http://localhost:5000", {
+  auth: { token: accessToken }
+});
+```
+
+| Direction | Event | Purpose |
+|---|---|---|
+| Client → server | `send_message` | Submit text and/or an uploaded image URL |
+| Server → clients | `receive_message` | Broadcast a persisted message |
+| Client → server | `typing`, `stop_typing` | Publish typing state |
+| Server → clients | `display_typing`, `stop_typing` | Notify other connected users |
+| Client → server | `mark_as_read` | Mark another user's message as read |
+| Server → clients | `message_read` | Broadcast the updated message |
+| Server → clients | `message_deleted` | Notify clients that a message was deleted |
+| Server → sender | `message_error` | Report a rejected or failed message send |
+
+The current implementation broadcasts to the shared Socket.IO namespace. These events are not scoped to private chats or conversation rooms.
+
+## Security model and known limitations
+
+### Controls currently present
+
+- Passwords are hashed with bcryptjs; the password field is excluded from normal queries and JSON serialization.
+- JWTs are verified with the HS256 algorithm and a startup-validated secret.
+- HTTP middleware and Socket.IO handshake both resolve the authenticated user from the token subject.
+- Message sender names are taken from the verified user record.
+- Message deletion is restricted to the authenticated sender.
+- Message history and image uploads require authentication.
+- Upload MIME types and file size are restricted; request JSON size is capped.
+- Selected socket events have an in-memory per-connection rate limiter.
+- CORS and Socket.IO CORS use the configured origin allowlist.
+
+### Important gaps
+
+- **One global room:** all authenticated users can retrieve the same message history and receive the same message broadcasts. There is no private messaging or conversation membership model.
+- **Global event scope:** typing, read-state and deletion notifications are broadcast to all connected sockets rather than authorized conversation participants.
+- **Limited rate limiting:** selected realtime event limits are per socket and in memory. There is no shared distributed limiter or comprehensive HTTP abuse protection.
+- **No automated integration suite:** current tests cover the socket event limiter, not database-backed HTTP routes, JWT lifecycle, upload integration or realtime authorization.
+- **No deployment blueprint:** production hosting, TLS, secrets management, monitoring, backups and operational runbooks still need to be configured and verified.
+- **No pagination/search:** message history is bounded to the latest 100 records but does not yet expose cursor pagination or search.
+
+This project is a learning and portfolio demonstration. Do not deploy it for real users or sensitive conversations until conversation-level authorization, integration tests, operational controls and an independent security review are complete.
+
+## Tests
+
+Run the checked-in backend middleware tests from the repository root:
+
+```bash
+npm run test:server
+```
+
+The current test suite exercises the in-memory Socket.IO event limiter: configured event limits, window expiry, unconfigured events and counter reset. It does not currently test the HTTP API, MongoDB persistence, authentication end-to-end, Cloudinary uploads or live Socket.IO behavior.
+
+The frontend has the standard Create React App test and build scripts:
+
+```bash
+cd client
+npm test
+npm run build
+```
+
+No CI workflow or production deployment configuration is documented as present in this repository. Run the checks locally before treating a change as verified.
 
 ## Roadmap
 
-- [ ] Integrate and test authentication in the active server entry point.
-- [ ] Add private conversation and membership authorization.
-- [ ] Harden Socket.IO event validation and room handling.
-- [ ] Add automated API and realtime integration tests.
-- [ ] Add production deployment configuration and genuine application screenshots.
+- [x] Registration and login with password hashing and JWT issuance
+- [x] Protected HTTP endpoints for message history, uploads and message deletion
+- [x] Authenticated Socket.IO handshake and server-derived sender identity
+- [x] Owner-checked message deletion
+- [x] Message validation, bounded history and upload restrictions
+- [x] Per-socket limits for selected realtime events
+- [x] Unit tests for the socket event limiter
+- [ ] Add private conversations, membership records and authorized conversation rooms
+- [ ] Scope message history, message writes, read receipts, typing and deletion events to conversation members
+- [ ] Add HTTP and Socket.IO integration tests with MongoDB test fixtures
+- [ ] Add pagination, message search and appropriate database indexes
+- [ ] Add shared rate limiting, deployment configuration, monitoring and backup/restore guidance
+- [ ] Capture genuine, sanitized application screenshots
 
 ## Maintainer
 
 **Matiur Rahaman** · [GitHub](https://github.com/matiur25580)
 
+---
 
-## Dashboard Gallery
+## Dashboard gallery
 
-Explore 12 illustrative collaboration workspaces for overview, team conversations, direct messages, group channels, message search, file sharing, presence, notifications, moderation, workspace access, realtime service health and engagement analytics. Sample values are illustrative only and are not live message content, user presence or service telemetry.
+The following 12 illustrations are product-concept previews for possible collaboration workspaces. They are not screenshots of implemented pages, live telemetry or real user activity.
 
 ### 01. Collaboration Overview
 
