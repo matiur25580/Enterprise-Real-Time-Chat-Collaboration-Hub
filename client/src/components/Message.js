@@ -1,5 +1,6 @@
 import React from 'react';
 
+// Presentational component that formats one message without managing chat state.
 function Message({ message }) {
   return (
     <div className="message">
