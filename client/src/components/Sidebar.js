@@ -1,5 +1,6 @@
 import React from 'react';
 
+// Display the current online-user collection supplied by the parent component.
 function Sidebar({ users }) {
   return (
     <div className="sidebar">
