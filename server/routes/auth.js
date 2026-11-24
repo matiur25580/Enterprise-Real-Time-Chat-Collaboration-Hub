@@ -5,13 +5,16 @@ const { getJwtSecret, authenticate } = require("../middleware/authenticate");
 
 const router = express.Router();
 
+// Issue a short-lived JWT whose subject identifies the authenticated database user.
 function issueToken(user) {
   return jwt.sign({}, getJwtSecret(), { subject: user._id.toString(), expiresIn: "12h", algorithm: "HS256" });
 }
+// Whitelist public profile fields so password and internal model data are never returned.
 function publicUser(user) {
   return { id: user._id.toString(), username: user.username, email: user.email, avatar: user.avatar || null };
 }
 
+// Registration validates input, prevents duplicate accounts, then returns a token and safe profile.
 router.post("/register", async (req, res, next) => {
   try {
     const username = typeof req.body?.username === "string" ? req.body.username.trim() : "";
@@ -30,6 +33,7 @@ router.post("/register", async (req, res, next) => {
   }
 });
 
+// Login loads the password hash explicitly because it is hidden by the User schema by default.
 router.post("/login", async (req, res, next) => {
   try {
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
