@@ -45,3 +45,5 @@ jobs:
         run: npm ci
       - name: Validate backend entry point
         run: node --check server/index.js
+      - name: Run realtime limiter tests
+        run: npm run test:server
