@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
+// Read and validate the signing secret in one place for HTTP and Socket.IO authentication.
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET;
   if (!secret || secret.length < 32) {
@@ -9,6 +10,7 @@ function getJwtSecret() {
   return secret;
 }
 
+// Verify the Bearer token and attach the matching database user to the request.
 async function authenticate(req, res, next) {
   try {
     const header = req.headers.authorization || "";
