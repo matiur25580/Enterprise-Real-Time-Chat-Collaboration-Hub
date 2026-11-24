@@ -1,3 +1,4 @@
+// Express handles HTTP routes; Socket.IO below provides real-time chat events.
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -15,10 +16,12 @@ const { authenticate, getJwtSecret } = require("./middleware/authenticate");
 const authRoutes = require("./routes/auth");
 const { createSocketEventLimiter } = require("./middleware/socket-rate-limit");
 
+// Fail fast at startup so the server never runs with a missing/weak JWT secret.
 try { getJwtSecret(); } catch (error) { console.error(error.message); process.exit(1); }
 
 const app = express();
 const server = http.createServer(app);
+// CORS allowlist controls which browser origins may call this API.
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -38,6 +41,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Uploaded chat images are stored remotely in Cloudinary, not on the server disk.
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -102,6 +106,7 @@ app.delete("/messages/:id", authenticate, async (req, res, next) => {
   }
 });
 
+// Authenticate the Socket.IO handshake before allowing any live chat events.
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
@@ -116,6 +121,7 @@ io.use(async (socket, next) => {
   }
 });
 
+// Register per-connection event handlers after the socket has been authenticated.
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
   const eventLimiter = createSocketEventLimiter({
@@ -184,6 +190,7 @@ io.on("connection", (socket) => {
   });
 });
 
+// Centralized error handling keeps upload, parsing, and route failures consistent.
 app.use((error, _req, res, _next) => {
   console.error("Request failed:", error.message);
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
@@ -206,7 +213,7 @@ if (!MONGO_URL) {
   process.exit(1);
 }
 
-mongoose
+// Start accepting traffic only after MongoDB has connected successfully.mongoose
   .connect(MONGO_URL)
   .then(() => {
     server.listen(PORT, () => {
