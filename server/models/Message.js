@@ -1,37 +1,22 @@
 const mongoose = require("mongoose");
 
-// Schema defines the persisted shape and validation rules for each chat message.
+// Every message belongs to one direct conversation; sender identity is server-derived.
 const messageSchema = new mongoose.Schema(
   {
-    sender: {
-      type: String,
+    conversationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Conversation",
       required: true,
-      trim: true,
-      maxlength: 80,
+      index: true,
     },
-    content: {
-      type: String,
-      default: "",
-      maxlength: 5000,
-    },
-    imageUrl: {
-      type: String,
-      default: null,
-      maxlength: 2048,
-    },
-    read: {
-      type: Boolean,
-      default: false,
-    },
-    timestamp: {
-      type: Date,
-      default: Date.now,
-    },
+    sender: { type: String, required: true, trim: true, maxlength: 80 },
+    content: { type: String, default: "", maxlength: 5000 },
+    imageUrl: { type: String, default: null, maxlength: 2048 },
+    read: { type: Boolean, default: false },
+    timestamp: { type: Date, default: Date.now },
   },
-  {
-    timestamps: false,
-    versionKey: false,
-  }
+  { timestamps: false, versionKey: false }
 );
 
+messageSchema.index({ conversationId: 1, timestamp: -1 });
 module.exports = mongoose.model("Message", messageSchema);
