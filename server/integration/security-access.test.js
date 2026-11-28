@@ -188,11 +188,39 @@ test("HTTP and Socket.IO enforce authentication, membership and sender ownership
     });
     assert.equal(outsiderSend.ok, false);
 
+    const participantDelete = await request(`/messages/${sent.messageId}`, {
+      token: bob.token,
+      method: "DELETE",
+    });
+    assert.equal(participantDelete.status, 404);
+
     const outsiderDelete = await request(`/messages/${sent.messageId}`, {
       token: mallory.token,
       method: "DELETE",
     });
     assert.equal(outsiderDelete.status, 404);
+
+    mallorySocket.emit("mark_as_read", { messageId: sent.messageId, conversationId });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const afterUnauthorizedRead = await request(
+      `/api/conversations/${conversationId}/messages`,
+      { token: bob.token }
+    );
+    assert.equal(afterUnauthorizedRead.status, 200);
+    assert.equal(afterUnauthorizedRead.data[0].read, false);
+
+    bobSocket.emit("mark_as_read", { messageId: sent.messageId, conversationId });
+    let afterAuthorizedRead;
+    const readDeadline = Date.now() + 3000;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      afterAuthorizedRead = await request(
+        `/api/conversations/${conversationId}/messages`,
+        { token: bob.token }
+      );
+    } while (afterAuthorizedRead.data?.[0]?.read !== true && Date.now() < readDeadline);
+    assert.equal(afterAuthorizedRead.status, 200);
+    assert.equal(afterAuthorizedRead.data[0].read, true);
 
     const ownerDelete = await request(`/messages/${sent.messageId}`, {
       token: alice.token,
