@@ -44,7 +44,6 @@ router.post("/", async (req, res, next) => {
     return res.status(200).json({ conversation });
   } catch (error) {
     if (error?.code === 11000) {
-      const participantIds = [String(req.user._id), String(req.body?.username)].sort();
       return res.status(409).json({ error: "Conversation already exists. Refresh your conversation list." });
     }
     return next(error);
