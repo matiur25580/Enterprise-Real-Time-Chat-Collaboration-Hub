@@ -34,6 +34,16 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,5 +55,9 @@ jobs:
         run: npm ci
       - name: Validate backend entry point
         run: node --check server/index.js
-      - name: Run realtime limiter tests
+      - name: Install Socket.IO test client
+        run: npm install --no-save --package-lock=false socket.io-client@4.8.3
+      - name: Run backend unit and security integration tests
         run: npm run test:server
+        env:
+          TEST_MONGO_URL: mongodb://127.0.0.1:27017

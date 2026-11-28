@@ -2,7 +2,7 @@
 
 A full-stack React and Socket.IO chat prototype with MongoDB message persistence, JWT-authenticated HTTP and realtime connections, and Cloudinary image uploads.
 
-> **Project status:** This is an evolving portfolio project, not a production messaging service. The current implementation is a single shared chat room: authenticated users can access the same message history and realtime events. Private conversations, conversation membership and per-room authorization are not implemented. Do not use real personal, confidential or sensitive message data.
+> **Project status:** This is an evolving portfolio project, not a production messaging service. Direct conversations are scoped to their two member accounts, and HTTP / Socket.IO operations verify membership before exposing messages or events. Database-backed HTTP and realtime integration tests, deployment hardening and an independent security review are still required. Do not use real personal, confidential or sensitive message data.
 
 ## Product overview
 
@@ -11,9 +11,10 @@ The application demonstrates a basic authenticated realtime messaging flow:
 1. A user registers or signs in with an email and password.
 2. The Express API verifies credentials and issues a short-lived bearer JWT.
 3. The React client stores the token in tab-scoped `sessionStorage` and validates restored sessions through the profile endpoint.
-4. The client sends authenticated HTTP requests and supplies the token in the Socket.IO handshake.
-5. The server persists messages in MongoDB and broadcasts realtime events to connected authenticated sockets.
-6. Users can upload images to Cloudinary and delete their own messages.
+4. The user starts or opens a direct conversation with another registered username.
+5. The API and Socket.IO server verify that the authenticated account belongs to the requested conversation before reading or changing its messages.
+6. Messages and realtime events are delivered only to the conversation's Socket.IO room; sender identity is derived from the verified account.
+7. Users can upload images to Cloudinary and delete their own messages within conversations they belong to.
 
 ## Implemented capabilities
 
@@ -21,8 +22,9 @@ The application demonstrates a basic authenticated realtime messaging flow:
 - Password hashing with bcryptjs; password fields are excluded from normal user queries and serialized responses.
 - JWT bearer authentication for protected HTTP endpoints.
 - JWT verification during the Socket.IO handshake; the sender identity is derived from the verified database user, not client-supplied message data.
-- Authenticated message history, image upload and message deletion.
-- Message creation and realtime broadcast, typing indicators, read-state updates and deletion notifications.
+- Private one-to-one conversations with a unique participant pair and membership-scoped history.
+- Membership-checked image uploads and message deletion.
+- Message creation, typing indicators, read-state updates and deletion notifications scoped to conversation rooms.
 - Owner-checked message deletion.
 - Cloudinary image uploads restricted to JPEG, PNG and WebP, with a 5 MB file-size limit.
 - Bounded message history (latest 100 records), request-body size limit and validation of message content.
@@ -48,7 +50,8 @@ React client (localhost:3000)
         Express + Socket.IO server (localhost:5000)
           +-- JWT authentication middleware
           +-- Authenticated socket handshake
-          +-- Message and user models
+          +-- Conversation, message and user models
+          +-- Membership checks and per-conversation rooms
           +-- Per-socket event limiter
           +-- Cloudinary upload adapter
                   |
@@ -156,9 +159,11 @@ All protected routes require an `Authorization: Bearer <token>` header.
 | `POST` | `/api/auth/register` | Public | Register with username, email and 12–128 character password |
 | `POST` | `/api/auth/login` | Public | Sign in and receive a 12-hour JWT |
 | `GET` | `/api/auth/me` | Bearer JWT | Return the authenticated user's public profile |
-| `GET` | `/messages` | Bearer JWT | Retrieve the latest 100 messages |
-| `POST` | `/upload` | Bearer JWT | Upload one supported image to Cloudinary |
-| `DELETE` | `/messages/:id` | Bearer JWT | Delete a message owned by the authenticated user |
+| `GET` | `/api/conversations` | Bearer JWT | List only conversations for the authenticated account |
+| `POST` | `/api/conversations` | Bearer JWT | Start or reopen a direct conversation by username |
+| `GET` | `/api/conversations/:id/messages` | Bearer JWT | Retrieve the latest 100 messages after membership verification |
+| `POST` | `/upload?conversationId=:id` | Bearer JWT | Upload an image only to a conversation the user belongs to |
+| `DELETE` | `/messages/:id` | Bearer JWT | Delete the authenticated user's message after membership verification |
 
 ### Realtime events
 
@@ -172,16 +177,18 @@ const socket = io("http://localhost:5000", {
 
 | Direction | Event | Purpose |
 |---|---|---|
-| Client → server | `send_message` | Submit text and/or an uploaded image URL |
-| Server → clients | `receive_message` | Broadcast a persisted message |
-| Client → server | `typing`, `stop_typing` | Publish typing state |
-| Server → clients | `display_typing`, `stop_typing` | Notify other connected users |
-| Client → server | `mark_as_read` | Mark another user's message as read |
-| Server → clients | `message_read` | Broadcast the updated message |
-| Server → clients | `message_deleted` | Notify clients that a message was deleted |
+| Client → server | `join_conversation` | Join a room only after membership verification |
+| Client → server | `leave_conversation` | Leave the selected conversation room |
+| Client → server | `send_message` | Submit a conversation ID and message content; server derives sender |
+| Server → room members | `receive_message` | Deliver a persisted message to that conversation only |
+| Client → server | `typing`, `stop_typing` | Publish typing state for the selected conversation |
+| Server → room members | `display_typing`, `stop_typing` | Notify members of that conversation only |
+| Client → server | `mark_as_read` | Mark another participant's message as read within the room |
+| Server → room members | `message_read` | Deliver the updated message to that conversation only |
+| Server → room members | `message_deleted` | Notify members of the affected conversation only |
 | Server → sender | `message_error` | Report a rejected or failed message send |
 
-The current implementation broadcasts to the shared Socket.IO namespace. These events are not scoped to private chats or conversation rooms.
+Room membership is checked against MongoDB before a socket can join, send, type or mark messages read. HTTP history, upload and delete operations apply the same participant boundary. A direct conversation is limited to its two participant accounts.
 
 ## Security model and known limitations
 
@@ -199,8 +206,8 @@ The current implementation broadcasts to the shared Socket.IO namespace. These e
 
 ### Important gaps
 
-- **One global room:** all authenticated users can retrieve the same message history and receive the same message broadcasts. There is no private messaging or conversation membership model.
-- **Global event scope:** typing, read-state and deletion notifications are broadcast to all connected sockets rather than authorized conversation participants.
+- **Direct messaging only:** the current model supports one-to-one conversations, not multi-member group channels, workspace roles or invitation workflows.
+- **No participant removal workflow:** membership changes and account-deletion lifecycle handling still need to be designed and tested.
 - **Limited rate limiting:** selected realtime event limits are per socket and in memory. There is no shared distributed limiter or comprehensive HTTP abuse protection.
 - **No automated integration suite:** current tests cover the socket event limiter, not database-backed HTTP routes, JWT lifecycle, upload integration or realtime authorization.
 - **No deployment blueprint:** production hosting, TLS, secrets management, monitoring, backups and operational runbooks still need to be configured and verified.
@@ -237,8 +244,8 @@ No CI workflow or production deployment configuration is documented as present i
 - [x] Message validation, bounded history and upload restrictions
 - [x] Per-socket limits for selected realtime events
 - [x] Unit tests for the socket event limiter
-- [ ] Add private conversations, membership records and authorized conversation rooms
-- [ ] Scope message history, message writes, read receipts, typing and deletion events to conversation members
+- [x] Add private direct conversations and participant membership records
+- [x] Scope message history, uploads, message writes, read receipts, typing and deletion events to conversation members
 - [ ] Add HTTP and Socket.IO integration tests with MongoDB test fixtures
 - [ ] Add pagination, message search and appropriate database indexes
 - [ ] Add shared rate limiting, deployment configuration, monitoring and backup/restore guidance

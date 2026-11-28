@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon server/index.js",
-    "test:server": "node --test server/middleware/*.test.js"
+    "test:server": "node --test server/middleware/*.test.js server/integration/*.test.js"
   },
   "keywords": [
     "chat",

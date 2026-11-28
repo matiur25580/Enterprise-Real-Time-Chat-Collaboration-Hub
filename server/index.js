@@ -1,4 +1,4 @@
-// Express handles HTTP routes; Socket.IO below provides real-time chat events.
+// Express handles HTTP routes; Socket.IO provides authenticated, conversation-scoped events.
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -7,21 +7,28 @@ const { Server } = require("socket.io");
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
 const Message = require("./models/Message");
+const Conversation = require("./models/Conversation");
 const User = require("./models/User");
-const jwt = require("jsonwebtoken");
 const { authenticate, getJwtSecret } = require("./middleware/authenticate");
+const { isConversationMember } = require("./middleware/conversation-access");
 const authRoutes = require("./routes/auth");
+const conversationRoutes = require("./routes/conversations");
 const { createSocketEventLimiter } = require("./middleware/socket-rate-limit");
 
-// Fail fast at startup so the server never runs with a missing/weak JWT secret.
-try { getJwtSecret(); } catch (error) { console.error(error.message); process.exit(1); }
+// Fail closed: never start an API or socket server with a missing/weak signing secret.
+try {
+  getJwtSecret();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
 
 const app = express();
 const server = http.createServer(app);
-// CORS allowlist controls which browser origins may call this API.
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
@@ -34,6 +41,7 @@ const io = new Server(server, {
 app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : false }));
 app.use(express.json({ limit: "16kb" }));
 app.use("/api/auth", authRoutes);
+app.use("/api/conversations", authenticate, conversationRoutes);
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -41,7 +49,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Uploaded chat images are stored remotely in Cloudinary, not on the server disk.
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -49,7 +56,6 @@ const storage = new CloudinaryStorage({
     allowed_formats: ["jpg", "jpeg", "png", "webp"],
   },
 });
-
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -63,50 +69,56 @@ const upload = multer({
 });
 
 const isValidObjectId = (id) => mongoose.isValidObjectId(id);
+const roomFor = (conversationId) => `conversation:${conversationId}`;
 
-// Return a bounded, chronological message history.
-app.get("/messages", authenticate, async (_req, res, next) => {
+async function findMembership(conversationId, userId) {
+  if (!isValidObjectId(conversationId)) return null;
+  const conversation = await Conversation.findById(conversationId).select("participants").lean();
+  return isConversationMember(conversation, userId) ? conversation : null;
+}
+
+// Upload authorization is checked before Multer streams the file to remote storage.
+app.post("/upload", authenticate, async (req, res, next) => {
   try {
-    const messages = await Message.find()
-      .sort({ timestamp: -1 })
-      .limit(100)
-      .lean();
-    res.json(messages.reverse());
+    const conversationId = req.query.conversationId;
+    if (!await findMembership(conversationId, req.user._id)) {
+      return res.status(404).json({ error: "Conversation not found." });
+    }
+    return upload.single("image")(req, res, (error) => {
+      if (error) return next(error);
+      if (!req.file) return res.status(400).json({ error: "An image file is required." });
+      return res.status(201).json({ imageUrl: req.file.path });
+    });
   } catch (error) {
-    next(error);
+    return next(error);
   }
 });
 
-app.post("/upload", authenticate, (req, res, next) => {
-  upload.single("image")(req, res, (error) => {
-    if (error) return next(error);
-    if (!req.file) {
-      return res.status(400).json({ error: "An image file is required." });
-    }
-    return res.status(201).json({ imageUrl: req.file.path });
-  });
-});
-
+// A user may delete only their own message and only while belonging to its conversation.
 app.delete("/messages/:id", authenticate, async (req, res, next) => {
   try {
     const { id } = req.params;
-    if (!isValidObjectId(id)) {
-      return res.status(400).json({ error: "Invalid message id." });
-    }
+    if (!isValidObjectId(id)) return res.status(400).json({ error: "Invalid message id." });
 
-    const deletedMessage = await Message.findOneAndDelete({ _id: id, sender: req.user.username });
-    if (!deletedMessage) {
+    const existing = await Message.findOne({ _id: id, sender: req.user.username }).select("conversationId");
+    if (!existing || !await findMembership(existing.conversationId, req.user._id)) {
       return res.status(404).json({ error: "Message not found." });
     }
+    const deletedMessage = await Message.findOneAndDelete({
+      _id: id,
+      sender: req.user.username,
+      conversationId: existing.conversationId,
+    });
+    if (!deletedMessage) return res.status(404).json({ error: "Message not found." });
 
-    io.emit("message_deleted", id);
+    io.to(roomFor(existing.conversationId)).emit("message_deleted", id);
     return res.status(200).json({ message: "Deleted successfully." });
   } catch (error) {
     return next(error);
   }
 });
 
-// Authenticate the Socket.IO handshake before allowing any live chat events.
+// Authenticate every Socket.IO handshake and reload the account from MongoDB.
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token;
@@ -121,9 +133,7 @@ io.use(async (socket, next) => {
   }
 });
 
-// Register per-connection event handlers after the socket has been authenticated.
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
   const eventLimiter = createSocketEventLimiter({
     limits: {
       send_message: { maxEvents: 30, windowMs: 60_000 },
@@ -133,63 +143,92 @@ io.on("connection", (socket) => {
     },
   });
 
-  socket.on("send_message", async (data) => {
+  socket.on("join_conversation", async (conversationId, acknowledge) => {
+    try {
+      const conversation = await findMembership(conversationId, socket.user._id);
+      if (!conversation) {
+        if (typeof acknowledge === "function") acknowledge({ ok: false, error: "Conversation not found." });
+        return;
+      }
+      await socket.join(roomFor(conversationId));
+      if (typeof acknowledge === "function") acknowledge({ ok: true });
+    } catch (_error) {
+      if (typeof acknowledge === "function") acknowledge({ ok: false, error: "Unable to join conversation." });
+    }
+  });
+
+  socket.on("leave_conversation", (conversationId) => {
+    if (isValidObjectId(conversationId)) socket.leave(roomFor(conversationId));
+  });
+
+  socket.on("send_message", async (data, acknowledge) => {
     if (!eventLimiter.allow("send_message")) {
-      socket.emit("message_error", { message: "You are sending messages too quickly. Please wait." });
+      if (typeof acknowledge === "function") acknowledge({ ok: false, error: "You are sending messages too quickly." });
       return;
     }
     try {
-      if (!data || typeof data !== "object") return;
+      const conversationId = data?.conversationId;
+      const room = roomFor(conversationId);
+      if (!isValidObjectId(conversationId) || !socket.rooms.has(room) ||
+          !await findMembership(conversationId, socket.user._id)) {
+        if (typeof acknowledge === "function") acknowledge({ ok: false, error: "Conversation access denied." });
+        return;
+      }
 
-      const sender = socket.user.username;
       const content = typeof data.content === "string" ? data.content.trim() : "";
       const imageUrl = typeof data.imageUrl === "string" ? data.imageUrl.trim() : "";
-
-      if (!sender || sender.length > 80) return;
-      if (content.length > 5000 || imageUrl.length > 2048) return;
-      if (!content && !imageUrl) return;
+      if (content.length > 5000 || imageUrl.length > 2048 || (!content && !imageUrl)) {
+        if (typeof acknowledge === "function") acknowledge({ ok: false, error: "Invalid message content." });
+        return;
+      }
 
       const savedMessage = await Message.create({
-        sender,
+        conversationId,
+        sender: socket.user.username,
         content,
         imageUrl: imageUrl || null,
       });
-      io.emit("receive_message", savedMessage);
+      io.to(room).emit("receive_message", savedMessage);
+      if (typeof acknowledge === "function") acknowledge({ ok: true, messageId: savedMessage._id });
     } catch (error) {
       console.error("Unable to save incoming message:", error.message);
-      socket.emit("message_error", { message: "Message could not be sent." });
+      if (typeof acknowledge === "function") acknowledge({ ok: false, error: "Message could not be sent." });
     }
   });
 
-  socket.on("typing", () => {
-    if (!eventLimiter.allow("typing")) return;
-    socket.broadcast.emit("display_typing", { sender: socket.user.username });
+  socket.on("typing", async (conversationId) => {
+    if (!eventLimiter.allow("typing") || !isValidObjectId(conversationId)) return;
+    const room = roomFor(conversationId);
+    if (!socket.rooms.has(room) || !await findMembership(conversationId, socket.user._id)) return;
+    socket.to(room).emit("display_typing", { sender: socket.user.username, conversationId });
   });
 
-  socket.on("stop_typing", () => {
-    if (!eventLimiter.allow("stop_typing")) return;
-    socket.broadcast.emit("stop_typing");
+  socket.on("stop_typing", async (conversationId) => {
+    if (!eventLimiter.allow("stop_typing") || !isValidObjectId(conversationId)) return;
+    const room = roomFor(conversationId);
+    if (!socket.rooms.has(room) || !await findMembership(conversationId, socket.user._id)) return;
+    socket.to(room).emit("stop_typing", { conversationId });
   });
 
-  socket.on("mark_as_read", async (messageId) => {
+  socket.on("mark_as_read", async (data) => {
     try {
-      if (!isValidObjectId(messageId)) return;
-      if (!eventLimiter.allow("mark_as_read")) return;
+      const { messageId, conversationId } = data || {};
+      if (!eventLimiter.allow("mark_as_read") || !isValidObjectId(messageId) ||
+          !isValidObjectId(conversationId)) return;
+      const room = roomFor(conversationId);
+      if (!socket.rooms.has(room) || !await findMembership(conversationId, socket.user._id)) return;
       const updatedMessage = await Message.findOneAndUpdate(
-        { _id: messageId, sender: { $ne: socket.user.username } },
+        { _id: messageId, conversationId, sender: { $ne: socket.user.username } },
         { read: true },
         { new: true }
       );
-      if (updatedMessage) io.emit("message_read", updatedMessage);
+      if (updatedMessage) io.to(room).emit("message_read", updatedMessage);
     } catch (error) {
       console.error("Unable to mark message as read:", error.message);
     }
   });
 
-  socket.on("disconnect", () => {
-    eventLimiter.reset();
-    console.log("User disconnected:", socket.id);
-  });
+  socket.on("disconnect", () => eventLimiter.reset());
 });
 
 // Centralized error handling keeps upload, parsing, and route failures consistent.
@@ -198,9 +237,7 @@ app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
     return res.status(413).json({ error: "Image must be 5 MB or smaller." });
   }
-  if (error.message?.includes("Only JPEG")) {
-    return res.status(400).json({ error: error.message });
-  }
+  if (error.message?.includes("Only JPEG")) return res.status(400).json({ error: error.message });
   if (error instanceof SyntaxError && error.status === 400) {
     return res.status(400).json({ error: "Invalid JSON request body." });
   }
@@ -209,20 +246,13 @@ app.use((error, _req, res, _next) => {
 
 const PORT = Number(process.env.PORT) || 5000;
 const MONGO_URL = process.env.MONGO_URL;
-
 if (!MONGO_URL) {
   console.error("MONGO_URL is required. Set it in server/.env before starting.");
   process.exit(1);
 }
 
-// Start accepting traffic only after MongoDB has connected successfully.
-mongoose
-  .connect(MONGO_URL)
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Chat server listening on port ${PORT}`);
-    });
-  })
+mongoose.connect(MONGO_URL)
+  .then(() => server.listen(PORT, () => console.log(`Chat server listening on port ${PORT}`)))
   .catch((error) => {
     console.error("Database connection failed:", error.message);
     process.exit(1);
