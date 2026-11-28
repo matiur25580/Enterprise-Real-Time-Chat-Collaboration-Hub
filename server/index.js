@@ -203,10 +203,11 @@ io.on("connection", (socket) => {
     socket.to(room).emit("display_typing", { sender: socket.user.username, conversationId });
   });
 
-  socket.on("stop_typing", (conversationId) => {
+  socket.on("stop_typing", async (conversationId) => {
     if (!eventLimiter.allow("stop_typing") || !isValidObjectId(conversationId)) return;
     const room = roomFor(conversationId);
-    if (socket.rooms.has(room)) socket.to(room).emit("stop_typing", { conversationId });
+    if (!socket.rooms.has(room) || !await findMembership(conversationId, socket.user._id)) return;
+    socket.to(room).emit("stop_typing", { conversationId });
   });
 
   socket.on("mark_as_read", async (data) => {
