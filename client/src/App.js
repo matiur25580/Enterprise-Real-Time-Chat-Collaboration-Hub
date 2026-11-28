@@ -25,7 +25,13 @@ function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [typingUser, setTypingUser] = useState("");
   const lastMessageRef = useRef(null);
+  const messageContainerRef = useRef(null);
+  const activeConversationRef = useRef(null);
   const sender = user ? user.username : "";
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
 
   const otherParticipant = (conversation) =>
     conversation?.participants?.find((participant) => participant._id !== user?.id);
@@ -62,13 +68,13 @@ function App() {
     socket.on("message_read", (updated) => setChat((previous) =>
       previous.map((item) => item._id === updated._id ? updated : item)));
     socket.on("display_typing", (data) => {
-      if (data.conversationId === activeConversation?._id && data.sender !== sender) {
+      if (data.conversationId === activeConversationRef.current?._id && data.sender !== sender) {
         setTypingUser(data.sender);
         setIsTyping(true);
       }
     });
     socket.on("stop_typing", (data) => {
-      if (!data?.conversationId || data.conversationId === activeConversation?._id) setIsTyping(false);
+      if (!data?.conversationId || data.conversationId === activeConversationRef.current?._id) setIsTyping(false);
     });
 
     return () => {
@@ -79,7 +85,7 @@ function App() {
       socket.off("stop_typing");
       socket.disconnect();
     };
-  }, [user, token, sender, activeConversation?._id]);
+  }, [user, token, sender]);
 
   // Join only the selected conversation, then request its bounded message history.
   useEffect(() => {
@@ -108,6 +114,24 @@ function App() {
   useEffect(() => {
     lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat]);
+
+  // Observe unread messages once per render and mark them read only in the active room.
+  useEffect(() => {
+    const container = messageContainerRef.current;
+    if (!container || !activeConversation?._id) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const messageId = entry.target.getAttribute("data-message-id");
+        if (messageId) {
+          socket.emit("mark_as_read", { messageId, conversationId: activeConversation._id });
+          observer.unobserve(entry.target);
+        }
+      });
+    });
+    container.querySelectorAll("[data-message-id]").forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, [chat, activeConversation?._id]);
 
   const handleTyping = (event) => {
     setMessage(event.target.value);
@@ -268,7 +292,7 @@ function App() {
           })}
         </div>
         {contactError && <p role="alert" style={{ padding: "0 12px" }}>{contactError}</p>}
-        <div className="message-container">
+        <div className="message-container" ref={messageContainerRef}>
           {activeConversation ? chat.map((msg, index) => (
             <div key={msg._id || index} className={"message " + (msg.sender === sender ? "own-message" : "")}>
               <div className="msg-header">
@@ -282,17 +306,7 @@ function App() {
                 {msg.sender === sender && <span className={"message-tick " + (msg.read ? "blue-tick" : "grey-tick")}>{msg.read ? "✔✔" : "✔"}</span>}
               </div>
               {!msg.read && msg.sender !== sender && msg._id && (
-                <span className="message-read-trigger" ref={(element) => {
-                  if (element && activeConversation?._id) {
-                    const observer = new IntersectionObserver(([entry]) => {
-                      if (entry.isIntersecting) {
-                        socket.emit("mark_as_read", { messageId: msg._id, conversationId: activeConversation._id });
-                        observer.unobserve(element);
-                      }
-                    });
-                    observer.observe(element);
-                  }
-                }} />
+                <span className="message-read-trigger" data-message-id={msg._id} />
               )}
             </div>
           )) : <p style={{ padding: 20 }}>Start a private conversation by entering another member’s username above.</p>}
