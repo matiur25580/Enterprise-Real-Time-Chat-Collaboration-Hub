@@ -4,7 +4,7 @@ import axios from "axios";
 import EmojiPicker from "emoji-picker-react";
 import "./App.css";
 
-// Keep one Socket.IO client instance; connect only after the user has authenticated.
+// The socket is created once and authenticated only after a valid API session exists.
 const socket = io({ autoConnect: false });
 
 function App() {
@@ -14,6 +14,10 @@ function App() {
   const [authForm, setAuthForm] = useState({ username: "", email: "", password: "" });
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [conversations, setConversations] = useState([]);
+  const [activeConversation, setActiveConversation] = useState(null);
+  const [contactUsername, setContactUsername] = useState("");
+  const [contactError, setContactError] = useState("");
   const [message, setMessage] = useState("");
   const [chat, setChat] = useState([]);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -23,7 +27,10 @@ function App() {
   const lastMessageRef = useRef(null);
   const sender = user ? user.username : "";
 
-  // Restore the previous session by validating the token with the server on app startup.
+  const otherParticipant = (conversation) =>
+    conversation?.participants?.find((participant) => participant._id !== user?.id);
+
+  // Restore a session only after the server validates the saved bearer token.
   useEffect(() => {
     const savedToken = sessionStorage.getItem("chat_token");
     if (!savedToken) return;
@@ -35,27 +42,34 @@ function App() {
       .catch(() => sessionStorage.removeItem("chat_token"));
   }, []);
 
-  // Connect the live channel, load history, and subscribe to chat events for the signed-in user.
+  // Establish the authenticated socket and load only conversations belonging to this account.
   useEffect(() => {
     if (!user || !token) return undefined;
     axios.defaults.headers.common.Authorization = "Bearer " + token;
     socket.auth = { token };
     socket.connect();
 
-    axios.get("/messages")
-      .then((response) => setChat(response.data))
-      .catch((error) => console.error("Unable to load messages:", error));
+    axios.get("/api/conversations")
+      .then((response) => {
+        const items = response.data.conversations || [];
+        setConversations(items);
+        setActiveConversation((current) => current || items[0] || null);
+      })
+      .catch((error) => console.error("Unable to load conversations:", error));
 
-    socket.on("receive_message", (data) => setChat((prev) => [...prev, data]));
-    socket.on("message_deleted", (id) => setChat((prev) => prev.filter((msg) => msg._id !== id)));
-    socket.on("message_read", (updated) => setChat((prev) => prev.map((msg) => msg._id === updated._id ? updated : msg)));
+    socket.on("receive_message", (data) => setChat((previous) => [...previous, data]));
+    socket.on("message_deleted", (id) => setChat((previous) => previous.filter((item) => item._id !== id)));
+    socket.on("message_read", (updated) => setChat((previous) =>
+      previous.map((item) => item._id === updated._id ? updated : item)));
     socket.on("display_typing", (data) => {
-      if (data.sender !== sender) {
+      if (data.conversationId === activeConversation?._id && data.sender !== sender) {
         setTypingUser(data.sender);
         setIsTyping(true);
       }
     });
-    socket.on("stop_typing", () => setIsTyping(false));
+    socket.on("stop_typing", (data) => {
+      if (!data?.conversationId || data.conversationId === activeConversation?._id) setIsTyping(false);
+    });
 
     return () => {
       socket.off("receive_message");
@@ -65,73 +79,129 @@ function App() {
       socket.off("stop_typing");
       socket.disconnect();
     };
-  }, [user, token, sender]);
+  }, [user, token, sender, activeConversation?._id]);
+
+  // Join only the selected conversation, then request its bounded message history.
+  useEffect(() => {
+    if (!user || !token || !activeConversation?._id) {
+      setChat([]);
+      return undefined;
+    }
+    const conversationId = activeConversation._id;
+    setChat([]);
+    setIsTyping(false);
+    socket.emit("join_conversation", conversationId, (result) => {
+      if (!result?.ok) {
+        setContactError(result?.error || "Unable to open this conversation.");
+        return;
+      }
+      axios.get("/api/conversations/" + conversationId + "/messages")
+        .then((response) => setChat(response.data))
+        .catch((error) => console.error("Unable to load conversation messages:", error));
+    });
+
+    return () => {
+      socket.emit("leave_conversation", conversationId);
+    };
+  }, [user, token, activeConversation?._id]);
 
   useEffect(() => {
     lastMessageRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat]);
 
-  // Broadcast typing state and automatically stop it after a short idle period.
   const handleTyping = (event) => {
     setMessage(event.target.value);
-    if (user) {
-      socket.emit("typing");
+    if (activeConversation?._id) {
+      socket.emit("typing", activeConversation._id);
       clearTimeout(window.typingTimeout);
-      window.typingTimeout = setTimeout(() => socket.emit("stop_typing"), 2000);
+      window.typingTimeout = setTimeout(() => {
+        socket.emit("stop_typing", activeConversation._id);
+      }, 2000);
     }
   };
 
-  // Send message content over the authenticated socket; the server persists and broadcasts it.
   const sendMessage = (event) => {
     if (event) event.preventDefault();
-    if (!message.trim() || !user) return;
-    socket.emit("send_message", { content: message });
-    socket.emit("stop_typing");
+    if (!message.trim() || !activeConversation?._id) return;
+    socket.emit("send_message", {
+      conversationId: activeConversation._id,
+      content: message,
+    }, (result) => {
+      if (!result?.ok) setContactError(result?.error || "Message could not be sent.");
+    });
+    socket.emit("stop_typing", activeConversation._id);
     setMessage("");
     setShowEmoji(false);
   };
 
-  // Upload the selected image first, then send its hosted URL as a normal chat message.
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
-    if (!file || !user) return;
+    if (!file || !activeConversation?._id) return;
     const formData = new FormData();
     formData.append("image", file);
     setUploading(true);
     try {
-      const response = await axios.post("/upload", formData);
-      socket.emit("send_message", { content: "📷 Photo", imageUrl: response.data.imageUrl });
-    } catch (_error) {
-      alert("Image upload failed.");
+      const response = await axios.post(
+        "/upload?conversationId=" + encodeURIComponent(activeConversation._id),
+        formData
+      );
+      socket.emit("send_message", {
+        conversationId: activeConversation._id,
+        content: "📷 Photo",
+        imageUrl: response.data.imageUrl,
+      }, (result) => {
+        if (!result?.ok) setContactError(result?.error || "Image message could not be sent.");
+      });
+    } catch (error) {
+      setContactError(error.response?.data?.error || "Image upload failed.");
     } finally {
       setUploading(false);
       event.target.value = "";
     }
   };
 
-  // Ask the API to delete only the current user's message, then update the local chat view.
   const deleteMessage = async (id) => {
     if (!id || !window.confirm("Delete this message?")) return;
     try {
       await axios.delete("/messages/" + id);
-      setChat((previous) => previous.filter((msg) => msg._id !== id));
+      setChat((previous) => previous.filter((item) => item._id !== id));
     } catch (error) {
-      alert(error.response?.data?.error || "Message could not be deleted.");
+      setContactError(error.response?.data?.error || "Message could not be deleted.");
     }
   };
 
-  // Share one form handler for registration and login, while keeping their request payloads distinct.
+  const createConversation = async (event) => {
+    event.preventDefault();
+    setContactError("");
+    try {
+      const response = await axios.post("/api/conversations", { username: contactUsername });
+      const conversation = response.data.conversation;
+      setConversations((previous) => [
+        conversation,
+        ...previous.filter((item) => item._id !== conversation._id),
+      ]);
+      setActiveConversation(conversation);
+      setContactUsername("");
+    } catch (error) {
+      setContactError(error.response?.data?.error || "Unable to start this conversation.");
+    }
+  };
+
   const submitAuth = async (event) => {
     event.preventDefault();
     setAuthError("");
     setAuthBusy(true);
     try {
       const endpoint = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
-      const payload = authMode === "register" ? authForm : { email: authForm.email, password: authForm.password };
+      const payload = authMode === "register"
+        ? authForm
+        : { email: authForm.email, password: authForm.password };
       const response = await axios.post(endpoint, payload);
       sessionStorage.setItem("chat_token", response.data.token);
       setToken(response.data.token);
       setUser(response.data.user);
+      setConversations([]);
+      setActiveConversation(null);
       setChat([]);
     } catch (error) {
       setAuthError(error.response?.data?.error || "Unable to authenticate. Please try again.");
@@ -140,13 +210,14 @@ function App() {
     }
   };
 
-  // Disconnect live events and clear session credentials and user-specific UI state.
   const logout = () => {
     socket.disconnect();
     sessionStorage.removeItem("chat_token");
     delete axios.defaults.headers.common.Authorization;
     setToken("");
     setUser(null);
+    setConversations([]);
+    setActiveConversation(null);
     setChat([]);
     setMessage("");
   };
@@ -175,25 +246,31 @@ function App() {
     <div className="App">
       <div className="chat-window">
         <div className="chat-header">
-          <h3>💬 Live Chat Box</h3>
+          <h3>💬 Private Chat</h3>
           <span>{sender}</span>
           <button type="button" onClick={logout}>Sign out</button>
         </div>
+        <form onSubmit={createConversation} className="chat-footer" style={{ gap: 8 }}>
+          <input className="msg-input" value={contactUsername} placeholder="Start chat with username…" onChange={(event) => setContactUsername(event.target.value)} required />
+          <button className="send-btn" type="submit">Open</button>
+        </form>
+        <div className="chat-footer" style={{ gap: 6, overflowX: "auto" }}>
+          {conversations.map((conversation) => {
+            const other = otherParticipant(conversation);
+            return (
+              <button key={conversation._id} type="button"
+                className="emoji-btn"
+                aria-pressed={activeConversation?._id === conversation._id}
+                onClick={() => setActiveConversation(conversation)}>
+                {other?.username || "Conversation"}
+              </button>
+            );
+          })}
+        </div>
+        {contactError && <p role="alert" style={{ padding: "0 12px" }}>{contactError}</p>}
         <div className="message-container">
-          {/* Render each message and observe incoming messages to mark them read when visible. */}
-          {chat.map((msg, index) => (
-            <div key={msg._id || index} className={"message " + (msg.sender === sender ? "own-message" : "")}
-              ref={(el) => {
-                if (el && !msg.read && msg.sender !== sender && msg._id) {
-                  const observer = new IntersectionObserver(([entry]) => {
-                    if (entry.isIntersecting) {
-                      socket.emit("mark_as_read", msg._id);
-                      observer.unobserve(el);
-                    }
-                  });
-                  observer.observe(el);
-                }
-              }}>
+          {activeConversation ? chat.map((msg, index) => (
+            <div key={msg._id || index} className={"message " + (msg.sender === sender ? "own-message" : "")}>
               <div className="msg-header">
                 <p className="sender-name">{msg.sender}</p>
                 {msg.sender === sender && <button className="delete-btn" onClick={() => deleteMessage(msg._id)}>🗑️</button>}
@@ -204,18 +281,31 @@ function App() {
                 <span className="message-time">{new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                 {msg.sender === sender && <span className={"message-tick " + (msg.read ? "blue-tick" : "grey-tick")}>{msg.read ? "✔✔" : "✔"}</span>}
               </div>
+              {!msg.read && msg.sender !== sender && msg._id && (
+                <span className="message-read-trigger" ref={(element) => {
+                  if (element && activeConversation?._id) {
+                    const observer = new IntersectionObserver(([entry]) => {
+                      if (entry.isIntersecting) {
+                        socket.emit("mark_as_read", { messageId: msg._id, conversationId: activeConversation._id });
+                        observer.unobserve(element);
+                      }
+                    });
+                    observer.observe(element);
+                  }
+                }} />
+              )}
             </div>
-          ))}
+          )) : <p style={{ padding: 20 }}>Start a private conversation by entering another member’s username above.</p>}
           {isTyping && <div className="typing-indicator">✍️ {typingUser} is typing...</div>}
           <div ref={lastMessageRef} />
         </div>
-        {showEmoji && <div className="emoji-picker"><EmojiPicker onEmojiClick={(emoji) => setMessage((prev) => prev + emoji.emoji)} /></div>}
+        {showEmoji && <div className="emoji-picker"><EmojiPicker onEmojiClick={(emoji) => setMessage((previous) => previous + emoji.emoji)} /></div>}
         <div className="chat-footer">
           <input type="file" accept="image/jpeg,image/png,image/webp" id="fileInput" style={{ display: "none" }} onChange={handleImageUpload} />
-          <button type="button" onClick={() => document.getElementById("fileInput").click()} className="emoji-btn">{uploading ? "⏳" : "🖼️"}</button>
-          <button type="button" onClick={() => setShowEmoji(!showEmoji)} className="emoji-btn">😊</button>
-          <input className="msg-input" value={message} placeholder="Type message..." onChange={handleTyping} onKeyDown={(e) => e.key === "Enter" && sendMessage(e)} />
-          <button className="send-btn" onClick={sendMessage}>Send</button>
+          <button type="button" onClick={() => document.getElementById("fileInput").click()} className="emoji-btn" disabled={!activeConversation}>{uploading ? "⏳" : "🖼️"}</button>
+          <button type="button" onClick={() => setShowEmoji(!showEmoji)} className="emoji-btn" disabled={!activeConversation}>😊</button>
+          <input className="msg-input" value={message} placeholder={activeConversation ? "Type message..." : "Choose a conversation"} onChange={handleTyping} onKeyDown={(event) => event.key === "Enter" && sendMessage(event)} disabled={!activeConversation} />
+          <button className="send-btn" onClick={sendMessage} disabled={!activeConversation}>Send</button>
         </div>
       </div>
     </div>
